@@ -1,0 +1,43 @@
+import React from 'react';
+import { Navigate, Outlet, useLocation } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
+import { Sprout } from 'lucide-react';
+
+export const RoleBasedRoute = ({ allowedRoles = [], requireVerified = false, children }) => {
+  const { isAuthenticated, role, isPending, loading } = useAuth();
+  const location = useLocation();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-[#F8F6EF]">
+        <div className="w-12 h-12 rounded-2xl bg-[#174D38] flex items-center justify-center text-[#C7E78B] shadow-lg animate-pulse mb-4">
+          <Sprout className="w-6 h-6 stroke-[2.5]" />
+        </div>
+        <p className="text-xs font-bold text-[#174D38] uppercase tracking-wider">
+          Validating Role Credentials...
+        </p>
+      </div>
+    );
+  }
+
+  // 1. Must be authenticated
+  if (!isAuthenticated) {
+    return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  // 2. Check if user's role is allowed
+  if (allowedRoles.length > 0 && !allowedRoles.includes(role)) {
+    // Cross-role protection: redirect to their own correct workspace
+    if (role === 'donor') return <Navigate to="/donor/dashboard" replace />;
+    if (role === 'organization') return <Navigate to="/organization/dashboard" replace />;
+    if (role === 'admin') return <Navigate to="/admin/dashboard" replace />;
+    return <Navigate to="/" replace />;
+  }
+
+  // 3. For organizations requiring verified accreditation
+  if (role === 'organization' && requireVerified && isPending) {
+    return <Navigate to="/organization/pending" replace />;
+  }
+
+  return children ? children : <Outlet />;
+};

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { Clock, MapPin, Users, Utensils, ArrowRight, ShieldCheck } from 'lucide-react';
+import { motion } from 'motion/react';
+import { Clock, MapPin, Users, Utensils, ArrowRight } from 'lucide-react';
 import { Badge } from '../common/Badge';
 
 export const DonationCard = ({ donation, onAction, actionLabel, showDonor = true }) => {
@@ -24,32 +25,38 @@ export const DonationCard = ({ donation, onAction, actionLabel, showDonor = true
   } = donation;
 
   return (
-    <div className="group bg-[#FDFAF5] rounded-3xl border border-[#E8EEE6] overflow-hidden shadow-sm hover:shadow-xl hover:border-[#C7E78B] transition-all duration-300 flex flex-col text-left">
-      {/* Image & Badges */}
+    <motion.div
+      whileHover={{ y: -5 }}
+      transition={{ type: "spring", stiffness: 350, damping: 25 }}
+      className="group bg-[#FDFAF5] rounded-3xl border border-[#E8EEE6] overflow-hidden shadow-sm hover:shadow-xl hover:border-[#C7E78B] transition-colors duration-300 flex flex-col text-left"
+    >
+      {/* Image & Floating Badges */}
       <div className="relative aspect-[16/10] overflow-hidden bg-[#E8EEE6]">
-        <img
+        <motion.img
+          whileHover={{ scale: 1.06 }}
+          transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
           src={imageUrl}
           alt={title}
-          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+          className="w-full h-full object-cover"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-black/10" />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/10 to-transparent pointer-events-none" />
 
         {/* Top Badges */}
-        <div className="absolute top-3 left-3 right-3 flex items-center justify-between">
-          <Badge variant="forest" size="sm" className="font-semibold uppercase tracking-wider backdrop-blur-sm">
+        <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none">
+          <Badge variant="forest" size="sm" className="font-bold uppercase tracking-wider backdrop-blur-md shadow-sm">
             {type}
           </Badge>
           <Badge
             variant={status}
             size="sm"
-            className="capitalize shadow-sm font-bold"
+            className="capitalize shadow-md font-bold"
           >
             {status}
           </Badge>
         </div>
 
         {/* Expiry Pill */}
-        <div className="absolute bottom-3 left-3 flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#174D38]/90 text-[#F8F6EF] text-xs font-semibold backdrop-blur-md">
+        <div className="absolute bottom-3 left-3 flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#174D38]/90 text-[#F8F6EF] text-xs font-semibold backdrop-blur-md shadow-sm">
           <Clock className="w-3.5 h-3.5 text-[#C7E78B]" />
           <span>{expiryHoursLeft ? `${expiryHoursLeft}h left` : expiryTime}</span>
         </div>
@@ -71,7 +78,7 @@ export const DonationCard = ({ donation, onAction, actionLabel, showDonor = true
           )}
 
           {/* Title */}
-          <h3 className="font-display font-bold text-lg text-[#174D38] group-hover:text-[#0f3426] line-clamp-1">
+          <h3 className="font-display font-bold text-base sm:text-lg text-[#174D38] group-hover:text-[#0f3426] line-clamp-1 transition-colors">
             {title}
           </h3>
 
@@ -83,7 +90,7 @@ export const DonationCard = ({ donation, onAction, actionLabel, showDonor = true
           <div className="grid grid-cols-2 gap-2 mt-4 pt-3 border-t border-[#E8EEE6]">
             <div className="flex items-center gap-2 text-xs text-[#202720]/80">
               <Utensils className="w-3.5 h-3.5 text-[#174D38]" />
-              <span className="font-semibold text-[#174D38]">{quantity}</span>
+              <span className="font-bold text-[#174D38]">{quantity}</span>
               <span className="text-[11px] text-[#202720]/60">{unit}</span>
             </div>
             <div className="flex items-center gap-1.5 text-xs text-[#202720]/80">
@@ -104,7 +111,7 @@ export const DonationCard = ({ donation, onAction, actionLabel, showDonor = true
               {dietary.map((tag) => (
                 <span
                   key={tag}
-                  className="px-2 py-0.5 rounded-lg bg-[#E8EEE6] text-[#202720]/75 text-[10px] font-medium"
+                  className="px-2 py-0.5 rounded-lg bg-[#E8EEE6] text-[#202720]/75 text-[10px] font-semibold"
                 >
                   {tag}
                 </span>
@@ -117,34 +124,37 @@ export const DonationCard = ({ donation, onAction, actionLabel, showDonor = true
         <div className="mt-5 pt-3 border-t border-[#E8EEE6] flex items-center justify-between gap-2">
           <Link
             to={`/donations/${id}`}
-            className="text-xs font-semibold text-[#174D38] hover:text-[#0f3426] flex items-center gap-1 transition-colors"
+            className="text-xs font-bold text-[#174D38] hover:text-[#0f3426] flex items-center gap-1 transition-colors group/link"
           >
             <span>View Details</span>
-            <ArrowRight className="w-3.5 h-3.5" />
+            <ArrowRight className="w-3.5 h-3.5 group-hover/link:translate-x-1 transition-transform" />
           </Link>
 
           {onAction ? (
-            <button
+            <motion.button
+              whileTap={{ scale: 0.96 }}
               onClick={() => onAction(donation)}
               disabled={status !== 'available'}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all shadow-sm ${
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shadow-sm ${
                 status === 'available'
                   ? 'bg-[#174D38] text-[#F8F6EF] hover:bg-[#0f3426]'
                   : 'bg-[#E8EEE6] text-[#202720]/40 cursor-not-allowed'
               }`}
             >
               {actionLabel || 'Request Food'}
-            </button>
+            </motion.button>
           ) : (
-            <Link
-              to={`/donations/${id}`}
-              className="px-3.5 py-1.5 bg-[#C7E78B] text-[#174D38] hover:bg-[#b1d86d] rounded-xl text-xs font-bold transition-colors"
-            >
-              Explore
-            </Link>
+            <motion.div whileTap={{ scale: 0.95 }}>
+              <Link
+                to={`/donations/${id}`}
+                className="px-3.5 py-1.5 bg-[#C7E78B] text-[#174D38] hover:bg-[#b1d86d] rounded-xl text-xs font-bold transition-colors inline-block"
+              >
+                Explore
+              </Link>
+            </motion.div>
           )}
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 };

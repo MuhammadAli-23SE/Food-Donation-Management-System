@@ -7,6 +7,21 @@ import {
   ORGANIZATIONS_LIST,
   SYSTEM_ACTIVITY
 } from '../data/mockData';
+import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
+import {
+  getDonations,
+  createDonationRecord,
+  updateDonationRecord,
+  deleteDonationRecord,
+  getRequests,
+  createRequestRecord,
+  updateRequestStatusRecord,
+  getTrackingRecords,
+  updateTrackingRecord,
+  normalizeDonation,
+  normalizeRequest,
+  normalizeTracking
+} from '../services/donationService';
 
 const AppContext = createContext(null);
 
@@ -21,6 +36,8 @@ export const AppProvider = ({ children }) => {
   const [trackingList, setTrackingList] = useState(INITIAL_TRACKING);
   const [organizations, setOrganizations] = useState(ORGANIZATIONS_LIST);
   const [activities, setActivities] = useState(SYSTEM_ACTIVITY);
+  const [loadingDb, setLoadingDb] = useState(false);
+  const [realtimeConnected, setRealtimeConnected] = useState(isSupabaseConfigured);
 
   // Notification Toast simulation
   const [toast, setToast] = useState(null);
@@ -83,59 +100,259 @@ export const AppProvider = ({ children }) => {
     setActivities((prev) => [newAct, ...prev]);
   };
 
-  // DONATIONS CRUD
-  const addDonation = (newDonationData) => {
-    const newId = `don_${Date.now().toString().slice(-4)}`;
-    const newDonation = {
-      id: newId,
-      donorId: currentUser?.id || "usr_donor_01",
-      donorName: currentUser?.organizationName || currentUser?.name || "Artisan Donor",
-      donorAvatar: currentUser?.avatar || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80",
-      status: "available",
-      createdAt: new Date().toISOString(),
-      ...newDonationData
+  // ==============================================================================
+  // Synchronize Live Data with Supabase PostgreSQL
+  // ==============================================================================
+  useEffect(() => {
+    const fetchLiveData = async () => {
+      if (!isSupabaseConfigured) return;
+      try {
+        setLoadingDb(true);
+        const [donationsRes, requestsRes, trackingRes, orgsRes] = await Promise.all([
+          getDonations(),
+          getRequests(),
+          getTrackingRecords(),
+          supabase.from('profiles').select('*').eq('role', 'organization')
+        ]);
+
+        if (donationsRes.data && donationsRes.data.length > 0) {
+          setDonations(donationsRes.data);
+        }
+        if (requestsRes.data && requestsRes.data.length > 0) {
+          setRequests(requestsRes.data);
+        }
+        if (trackingRes.data && trackingRes.data.length > 0) {
+          setTrackingList(trackingRes.data);
+        }
+        if (orgsRes.data && orgsRes.data.length > 0) {
+          const mapped = orgsRes.data.map((o) => ({
+            id: o.id,
+            name: o.organization_name || o.full_name,
+            contactPerson: o.contact_person || o.full_name,
+            email: o.email || '',
+            phone: o.phone || '',
+            address: o.address || '',
+            city: o.city || 'Seattle, WA',
+            verificationStatus: o.verification_status,
+            description: o.description || 'Community welfare non-profit',
+            mealsDistributed: 150,
+            registrationNo: `501C3-${o.id.slice(0, 6).toUpperCase()}`,
+            hygieneCertified: true,
+          }));
+          setOrganizations(mapped);
+        }
+      } catch (err) {
+        console.warn('[AppContext] Could not load live records, fallback to mock data:', err);
+      } finally {
+        setLoadingDb(false);
+      }
     };
-    setDonations((prev) => [newDonation, ...prev]);
-    logActivity("Donation Created", newDonation.donorName, "Donor", `${newDonation.title} (${newDonation.quantity} ${newDonation.unit})`, "Listing");
+
+    fetchLiveData();
+  }, []);
+
+  // ==============================================================================
+  // Phase 5: Supabase Realtime Channel Subscription
+  // ==============================================================================
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
+    const channel = supabase
+      .channel('replate-live-feed')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'donations' },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const newItem = normalizeDonation(payload.new);
+            setDonations((prev) => {
+              if (prev.some((d) => d.id === newItem.id)) return prev;
+              return [newItem, ...prev];
+            });
+            logActivity(
+              "Donation Created",
+              newItem.donorName || "Food Donor",
+              "Donor",
+              `${newItem.title} (${newItem.quantity} ${newItem.unit})`,
+              "Live Feed"
+            );
+            showToast(`New surplus food listing: ${newItem.title}`, "info");
+          } else if (payload.eventType === 'UPDATE') {
+            const updated = normalizeDonation(payload.new);
+            setDonations((prev) =>
+              prev.map((d) => (d.id === updated.id ? { ...d, ...updated } : d))
+            );
+          } else if (payload.eventType === 'DELETE') {
+            setDonations((prev) => prev.filter((d) => d.id !== payload.old.id));
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'requests' },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const newReq = normalizeRequest(payload.new);
+            setRequests((prev) => {
+              if (prev.some((r) => r.id === newReq.id)) return prev;
+              return [newReq, ...prev];
+            });
+            logActivity(
+              "Request Submitted",
+              newReq.organizationName || "Welfare NGO",
+              "Organization",
+              `${newReq.donationTitle}`,
+              "Live Feed"
+            );
+            showToast(`New food allocation request received!`, "success");
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedReq = normalizeRequest(payload.new);
+            setRequests((prev) =>
+              prev.map((r) => (r.id === updatedReq.id ? { ...r, ...updatedReq } : r))
+            );
+            if (updatedReq.status === 'approved') {
+              showToast(`Food request for "${updatedReq.donationTitle}" was APPROVED!`, "success");
+            } else if (updatedReq.status === 'rejected') {
+              showToast(`Food request was declined.`, "info");
+            }
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'tracking' },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const newTrk = normalizeTracking(payload.new);
+            setTrackingList((prev) => [newTrk, ...prev]);
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedTrk = normalizeTracking(payload.new);
+            setTrackingList((prev) =>
+              prev.map((t) => (t.id === updatedTrk.id ? { ...t, ...updatedTrk } : t))
+            );
+            showToast(`Logistics milestone updated: ${updatedTrk.status.replace('_', ' ').toUpperCase()}`, "info");
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'profiles' },
+        (payload) => {
+          if (payload.eventType === 'UPDATE') {
+            setOrganizations((prev) =>
+              prev.map((o) =>
+                o.id === payload.new.id
+                  ? { ...o, verificationStatus: payload.new.verification_status }
+                  : o
+              )
+            );
+            if (payload.new.verification_status === 'verified') {
+              showToast(`Organization accreditation verified by Administrator!`, "success");
+            }
+          }
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          setRealtimeConnected(true);
+        } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
+          setRealtimeConnected(false);
+        }
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  // ==============================================================================
+  // DONATIONS CRUD
+  // ==============================================================================
+  const addDonation = async (newDonationData) => {
+    const donorId = currentUser?.id;
+    let createdRecord = null;
+
+    // Check if live Supabase record can be created (UUID id check)
+    if (isSupabaseConfigured && donorId && !donorId.startsWith('usr_')) {
+      const { data, error } = await createDonationRecord(donorId, newDonationData);
+      if (data && !error) {
+        createdRecord = data;
+      }
+    }
+
+    if (!createdRecord) {
+      const newId = `don_${Date.now().toString().slice(-4)}`;
+      createdRecord = {
+        id: newId,
+        donorId: donorId || "usr_donor_01",
+        donorName: currentUser?.organizationName || currentUser?.name || "Artisan Donor",
+        donorAvatar: currentUser?.avatar || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80",
+        status: "available",
+        createdAt: new Date().toISOString(),
+        ...newDonationData
+      };
+    }
+
+    setDonations((prev) => [createdRecord, ...prev]);
+    logActivity("Donation Created", createdRecord.donorName, "Donor", `${createdRecord.title} (${createdRecord.quantity} ${createdRecord.unit})`, "Listing");
     showToast("New surplus food donation posted!", "success");
-    return newDonation;
+    return createdRecord;
   };
 
-  const updateDonation = (id, fields) => {
+  const updateDonation = async (id, fields) => {
+    if (isSupabaseConfigured && !id.startsWith('don_')) {
+      await updateDonationRecord(id, fields);
+    }
     setDonations((prev) =>
       prev.map((item) => (item.id === id ? { ...item, ...fields } : item))
     );
     showToast("Donation listing updated", "success");
   };
 
-  const deleteDonation = (id) => {
+  const deleteDonation = async (id) => {
+    if (isSupabaseConfigured && !id.startsWith('don_')) {
+      await deleteDonationRecord(id);
+    }
     setDonations((prev) => prev.filter((item) => item.id !== id));
     showToast("Donation removed", "info");
   };
 
+  // ==============================================================================
   // REQUESTS MANAGEMENT
-  const submitRequest = (donationId, { requestedQuantity, notes }) => {
+  // ==============================================================================
+  const submitRequest = async (donationId, { requestedQuantity, notes }) => {
     const donation = donations.find((d) => d.id === donationId);
     if (!donation) return;
 
-    const newReq = {
-      id: `req_${Date.now().toString().slice(-4)}`,
-      donationId,
-      donationTitle: donation.title,
-      donationImage: donation.imageUrl,
-      organizationId: currentUser?.id || "usr_org_01",
-      organizationName: currentUser?.organizationName || "Hope Community Kitchen",
-      orgAvatar: currentUser?.avatar || "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=200&q=80",
-      donorId: donation.donorId,
-      donorName: donation.donorName,
-      requestedQuantity: requestedQuantity || `${donation.quantity} ${donation.unit}`,
-      status: "pending",
-      notes: notes || "Requested for immediate community meal service.",
-      createdAt: new Date().toISOString()
-    };
+    const orgId = currentUser?.id;
+    let newReq = null;
+
+    if (isSupabaseConfigured && orgId && !orgId.startsWith('usr_') && !orgId.startsWith('org_')) {
+      const { data, error } = await createRequestRecord(orgId, donationId, { requestedQuantity, notes });
+      if (data && !error) {
+        newReq = data;
+      }
+    }
+
+    if (!newReq) {
+      newReq = {
+        id: `req_${Date.now().toString().slice(-4)}`,
+        donationId,
+        donationTitle: donation.title,
+        donationImage: donation.imageUrl,
+        organizationId: orgId || "usr_org_01",
+        organizationName: currentUser?.organizationName || "Hope Community Kitchen",
+        orgAvatar: currentUser?.avatar || "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=200&q=80",
+        donorId: donation.donorId,
+        donorName: donation.donorName,
+        requestedQuantity: requestedQuantity || `${donation.quantity} ${donation.unit}`,
+        status: "pending",
+        notes: notes || "Requested for immediate community meal service.",
+        createdAt: new Date().toISOString()
+      };
+    }
 
     setRequests((prev) => [newReq, ...prev]);
-    // update donation status to requested
     setDonations((prev) =>
       prev.map((d) => (d.id === donationId ? { ...d, status: "requested" } : d))
     );
@@ -145,9 +362,13 @@ export const AppProvider = ({ children }) => {
     return newReq;
   };
 
-  const updateRequestStatus = (requestId, newStatus) => {
+  const updateRequestStatus = async (requestId, newStatus) => {
     const targetReq = requests.find((r) => r.id === requestId);
     if (!targetReq) return;
+
+    if (isSupabaseConfigured && !requestId.startsWith('req_')) {
+      await updateRequestStatusRecord(requestId, newStatus);
+    }
 
     setRequests((prev) =>
       prev.map((r) => (r.id === requestId ? { ...r, status: newStatus } : r))
@@ -179,7 +400,6 @@ export const AppProvider = ({ children }) => {
       logActivity("Request Approved", targetReq.donorName, "Donor", `${targetReq.organizationName} reserved food`, "Fulfillment");
       showToast("Request approved! Pickup tracking created.", "success");
     } else if (newStatus === "rejected") {
-      // Revert donation to available
       setDonations((prev) =>
         prev.map((d) => (d.id === targetReq.donationId ? { ...d, status: "available" } : d))
       );
@@ -192,8 +412,14 @@ export const AppProvider = ({ children }) => {
     }
   };
 
+  // ==============================================================================
   // TRACKING PROGRESS
-  const updateTrackingStatus = (trackingId, nextStatus, details = {}) => {
+  // ==============================================================================
+  const updateTrackingStatus = async (trackingId, nextStatus, details = {}) => {
+    if (isSupabaseConfigured && !trackingId.startsWith('trk_')) {
+      await updateTrackingRecord(trackingId, nextStatus, details);
+    }
+
     setTrackingList((prev) =>
       prev.map((item) => {
         if (item.id === trackingId) {
@@ -204,7 +430,6 @@ export const AppProvider = ({ children }) => {
             ...details
           };
           if (nextStatus === "distributed") {
-            // mark donation as completed
             setDonations((dList) =>
               dList.map((d) => (d.id === item.donationId ? { ...d, status: "completed" } : d))
             );
@@ -224,8 +449,17 @@ export const AppProvider = ({ children }) => {
     showToast(`Status updated to: ${nextStatus.replace('_', ' ').toUpperCase()}`, "success");
   };
 
+  // ==============================================================================
   // ADMIN VERIFICATION
-  const verifyOrganization = (orgId, status) => {
+  // ==============================================================================
+  const verifyOrganization = async (orgId, status) => {
+    if (isSupabaseConfigured && !orgId.startsWith('usr_') && !orgId.startsWith('org_')) {
+      await supabase
+        .from('profiles')
+        .update({ verification_status: status })
+        .eq('id', orgId);
+    }
+
     setOrganizations((prev) =>
       prev.map((org) => (org.id === orgId ? { ...org, verificationStatus: status } : org))
     );
@@ -263,7 +497,9 @@ export const AppProvider = ({ children }) => {
         activities,
         logActivity,
         toast,
-        showToast
+        showToast,
+        loadingDb,
+        realtimeConnected
       }}
     >
       {children}
